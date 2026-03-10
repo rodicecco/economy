@@ -22,7 +22,7 @@ class Data:
                             'DGS10':'DGS10',
                             'DGS2':'DGS2', 
                             'FEDFUNDS':'FEDFUNDS', 
-                            'CPIAUCSL':'CPIAUCLS'}
+                            'CPIAUCSL':'CPIAUCSL'}
         
         self.db_series = {'ismmfg':{'date': ['date', 'date'],
                                     'index': ['ism_mfg_index','ISM Manufacturing PMI'], 
@@ -300,7 +300,7 @@ yield_curve_settings = {
                 }
 
 cpi_settings = {
-                'cpi':['yoy', 'main'], 
+                'CPIAUCSL':['yoy', 'main'], 
                 }
 
 
