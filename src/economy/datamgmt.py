@@ -192,9 +192,10 @@ class Transformations:
         return self.data_[col]
     
 class Series(Transformations):
-    def __init__(self, name:str='', code:str='',  settings:dict={}):
+    def __init__(self, name:str='', description:str='', code:str='',  settings:dict={}):
 
         self.name = name
+        self.description = description
         self.code = code
         self.settings = settings
         self.all_data = None
@@ -251,7 +252,8 @@ class Series(Transformations):
     def transform(self):
         for series in self.global_series:
             transformation = self.transformations[series]
-            self.data_[series] = self.transformation_mapping[transformation](series)
+            for trans in transformation:
+                self.data_[series] = self.transformation_mapping[trans](series)
         
         return True
     
@@ -310,10 +312,10 @@ class Series(Transformations):
 
 
         fig.update_layout(
-            title={
-                'text': self.name,
-                'font': {'size': 20, 'family': 'Arial, sans-serif'} # TITLE FONT
-            },
+            #title={
+            #    'text': self.name,
+            #    'font': {'size': 20, 'family': 'Arial, sans-serif'} # TITLE FONT
+            #},
             legend=dict(
                         orientation="h",      # Horizontal orientation
                         yanchor="bottom",     # Anchor the bottom of the legend
@@ -322,7 +324,7 @@ class Series(Transformations):
                         x=0.5, 
                         font = {'size': 12}),
             font={'family': "Arial, sans-serif", 'color': "black"},   
-            margin=dict(l=10, r=10, t=100, b=10), # 't' is 50 to leave room for the title
+            margin=dict(l=10, r=10, t=10, b=10), # 't' is 50 to leave room for the title
             height = 400*rows,
             autosize=True,
             template="plotly_white", hovermode="x")
