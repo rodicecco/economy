@@ -258,8 +258,8 @@ class Series(Transformations):
             y=-0.2,               # Position it below the x-axis (negative value)
             xanchor="center",     # Center the legend horizontally
             x=0.5),   
-            #height=800, 
-            #width=1200, 
+            height=800*rows, 
+            width=1200, 
             template="plotly_white", hovermode="x")
 
         return fig

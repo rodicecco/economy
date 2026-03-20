@@ -310,15 +310,21 @@ class Series(Transformations):
 
 
         fig.update_layout(
-            title = self.name, 
+            title={
+                'text': self.name,
+                'font': {'size': 20, 'family': 'Arial, sans-serif'} # TITLE FONT
+            },
             legend=dict(
-            orientation="h",      # Horizontal orientation
-            yanchor="bottom",     # Anchor the bottom of the legend
-            y=-0.2,               # Position it below the x-axis (negative value)
-            xanchor="center",     # Center the legend horizontally
-            x=0.5),   
-            #height=800, 
-            #width=1200, 
+                        orientation="h",      # Horizontal orientation
+                        yanchor="bottom",     # Anchor the bottom of the legend
+                        y=-0.2,               # Position it below the x-axis (negative value)
+                        xanchor="center",     # Center the legend horizontally
+                        x=0.5, 
+                        font = {'size': 12}),
+            font={'family': "Arial, sans-serif", 'color': "black"},   
+            margin=dict(l=10, r=10, t=100, b=10), # 't' is 50 to leave room for the title
+            height = 400*rows,
+            autosize=True,
             template="plotly_white", hovermode="x")
 
         return fig
