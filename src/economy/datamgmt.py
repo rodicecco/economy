@@ -1,9 +1,19 @@
 import pandas as pd
 import datamgmt
+import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
 db_obj = datamgmt.admin.Database('', [])
+
+def finc_series_meta():
+    meta_columns = ['title', 'notes', 'series_id', 'name', 'link']
+    meta = {'GSPC.INDX':['S&P 500', 'U.S Large Cap', 'SPY', '', ''], 
+            'BCOMCL.INDX':['WTI Crude Oil', 'Crude Oil', 'BCOMCL.INDX', '', '']}
+    frame = pd.DataFrame(meta).T
+    frame.columns = meta_columns
+    frame.index = frame.index.astype(object)
+    return frame
 
 
 def load_from_db(columns:list, table:str, id_driver:str, series_ids:list):
@@ -16,6 +26,20 @@ def load_from_db(columns:list, table:str, id_driver:str, series_ids:list):
             resp = pd.read_sql(query, conn)
 
         return resp
+
+def load_from_api(symbols:list):
+    obj = datamgmt.eod.Historical(symbols)
+    data = obj.data(symbols)
+    data = obj.data(symbols).groupby(['date', 'symbol'])['adjusted_close'].last().unstack('symbol')
+    data.index = pd.to_datetime(data.index)
+    return data
+
+def rank_transform(df):
+    """
+    Ranks columns against each other for each date.
+    1 is the highest value (e.g., highest GDP growth).
+    """
+    return df.rank(axis=1, ascending=False, method='min')
 
 #Class for calculated metrics
 
@@ -83,14 +107,50 @@ class YIELDCURVE:
         return self.data
 
 
+class PARTTIME:
+    
+    def __init__(self):
+
+        self.series_ids = [
+                            'LNS12005977',
+                            'LNS12032194',
+                            'CE16OV'                             
+                          ]
+        #Data initially empty
+        self.data = None
+
+    def calculate(self):
+        #Yield Curve Calculation
+        self.data['C-PARTTIME'] = self.data['LNS12005977'] + self.data['LNS12032194']
+        self.data['C-FULLTIME'] = self.data['CE16OV'] - self.data['C-PARTTIME']
+        self.data['C-FULLTOPART'] = self.data['C-FULLTIME'] / self.data['C-PARTTIME']
+        self.data = self.data[['C-PARTTIME', 'C-FULLTIME', 'C-FULLTOPART']]
+        
+        #ID : 'title', 'notes', 'series_id', 'name', 'link'
+        self.meta_index = ['C-PARTTIME', 'C-FULLTIME', 'C-FULLTOPART']
+        self.meta = [
+                        ['Part Time Employees', 'Part-time for economic & non-economic reasons', 'C-PARTTIME', '', ''], 
+                        ['Full-time employees', 'All employees excluding all part-time employees', 'C-FULLTIME', '', ''], 
+                        ['Full-to-Part Ratio', 'Ratio of full-time to part-time employees', 'C-FULLTOPART', '', '']
+                    ]
+        
+        self.meta_columns = ['title', 'notes', 'series_id', 'name', 'link']
+        self.meta_table = pd.DataFrame(self.meta,index = self.meta_index, columns=self.meta_columns)
+        self.meta_table.index = self.meta_table.index.astype(object)
+        
+        return self.data
+
+
 CALCMENU = {
             'C-CFCF':CFCF, 
-            'C-TWOTOTEN':YIELDCURVE
+            'C-TWOTOTEN':YIELDCURVE, 
+            'C-FULLTOPART':PARTTIME
             }
 
+    
 
 class EconData:
-    def __init__(self, series_ids=[]):
+    def __init__(self, series_ids=[], financials=['SPY']):
         
         #Define data columns, table and driver
         self.data_columns = ['date', 'id', 'value']
@@ -108,6 +168,7 @@ class EconData:
 
         #Define series_ids to be pulled
         self.series_ids = series_ids
+        self.financials = financials
 
         self.parse_series()
         self.series_ids.append('USREC')
@@ -129,13 +190,26 @@ class EconData:
         return True
 
     def load_data(self):
+        #Load financial data from API
+        finc_data = load_from_api(self.financials)
 
+        #Load economic data from internal sources
         resp = load_from_db(self.data_columns, self.data_table, self.id_driver, self.series_ids)
 
         data = resp
         data = data.groupby(['date', self.id_driver]).last().unstack(self.id_driver)
         data.index = pd.to_datetime(data.index)
         data = data.droplevel(0, axis=1)
+
+        min_date = min(data.index.min(), finc_data.index.min())
+        max_date = max(data.index.max(), finc_data.index.max())
+        daily_index = pd.date_range(min_date, max_date, freq='D')
+        data = data.reindex(daily_index, fill_value=np.nan)
+
+        data = data.merge(finc_data, how='left', left_index=True, right_index=True)
+        data[self.financials] = data[self.financials].ffill()
+        data.index.name = 'date'
+        data = data.resample('MS').last()
 
         self.data_ = data
 
@@ -148,6 +222,10 @@ class EconData:
 
         series_meta = pd.merge(resp_series, resp_release, left_on='id', right_on='series_id', how='left')
         series_meta.set_index('id', inplace=True)
+
+        finc_meta = finc_series_meta().loc[self.financials]
+        series_meta = pd.concat([series_meta, finc_meta], ignore_index=False)
+
 
         self.meta_ = series_meta
 
@@ -179,25 +257,28 @@ class EconData:
         return True
 
 
+
 class Transformations:
     def __init__(self):
         self.transformation_mapping = { '':self.default_transform,
-                                        'yoy':self.m_yoy}
+                                        'yoy':self.yoy}
 
-    def m_yoy(self, col):
-        return self.data_[col].pct_change(12) * 100
+    def yoy(self, col):
+    # Use pd.DateOffset to ensure it looks back exactly 1 year
+        return self.data_[col].pct_change(freq=pd.DateOffset(years=1)) * 100
 
 
     def default_transform(self, col):
         return self.data_[col]
     
 class Series(Transformations):
-    def __init__(self, name:str='', description:str='', code:str='',  settings:dict={}):
+    def __init__(self, name:str='', description:str='', code:str='',  settings:dict={}, finc_settings:dict={}):
 
         self.name = name
         self.description = description
         self.code = code
         self.settings = settings
+        self.finc_settings = finc_settings
         self.all_data = None
 
         self.parse_series()
@@ -221,30 +302,42 @@ class Series(Transformations):
         #Get list of series
         series_ids = []
         for series in self.settings.keys():
-            if self.settings[series][2] == 1:
+            if self.settings[series][-1] == 1:
                 series_ids.append(series)
             else:
                 continue
 
-
+        #self.master_series = [x for x in series_ids if self.settings[x][3] == 'master']
         self.series = series_ids
         self.global_series = list(self.settings.keys())
+        self.global_series = self.global_series
+
+        self.finc_series = list(self.finc_settings.keys())
 
         #Get all transformations for series
         self.transformations = dict(zip(self.global_series, [self.settings[series][0] for series in self.global_series]))
+        self.finc_transformations = dict(zip(self.finc_series, [self.finc_settings[series][0] for series in self.finc_series]))
+
+
+        self.thresholds = dict(zip(self.global_series, [self.settings[series][2] for series in self.global_series]))
 
         return True
     
     def clean_data(self):
-        self.series_meta = self.all_data.meta_.loc[self.global_series]
-        data = self.all_data.data_[self.global_series].copy()
-        for col in data.columns:
+
+        self.series_meta = self.all_data.meta_.loc[list(set(self.global_series+self.finc_series))]
+        data = self.all_data.data_[list(set(self.global_series+self.finc_series))].copy()
+        #data = data.resample('ME').last()
+        min_date = data[self.axis['main']].dropna().index.min()
+        data = data.loc[min_date:]
+
+        for col in self.global_series:
             if self.settings[col][1] != 'main':
-                data[col] = data[col].ffill()
+                data[col] = data[col]
             else:
                 continue
         
-        data = data.dropna(subset=self.axis['main'])
+        #data = data.dropna(subset=self.axis['main'])
         self.data_ = data
         self.recession = self.all_data.data_.dropna(subset=self.axis['main'])['USREC'].ffill() 
         return True
@@ -252,6 +345,11 @@ class Series(Transformations):
     def transform(self):
         for series in self.global_series:
             transformation = self.transformations[series]
+            for trans in transformation:
+                self.data_[series] = self.transformation_mapping[trans](series)
+
+        for series in self.finc_series:
+            transformation = self.finc_transformations[series]
             for trans in transformation:
                 self.data_[series] = self.transformation_mapping[trans](series)
         
@@ -285,18 +383,32 @@ class Series(Transformations):
         specs = [[{"secondary_y": True}]]
         for _ in range(len(subplots)):
             specs.append([{'secondary_y':False}])
+        #specs.append([{'secondary_y':False}])
+
 
         fig = make_subplots(rows=rows, cols=1, shared_xaxes=True, vertical_spacing=0.05, specs=specs)
 
         for i, name in enumerate(axis['main']):
             is_secondary = i > 0
+            threshold = self.thresholds[name]
+
             series_name = f'{self.series_meta.loc[name, 'title']} ({self.settings[name][0]})'
             fig.add_trace(go.Scatter(x=data.index, y=data[name], name=series_name), row=1, col=1, secondary_y=is_secondary)
+            if threshold =='':
+                continue
+            else:
+                fig.add_trace(go.Scatter(x=data.index, y=np.repeat(threshold, len(data.index)), opacity=0.5, showlegend=False), row=1, col=1, secondary_y=is_secondary)
         
         for subplot in subplots:
             for x in axis[subplot]:
                 series_name = f'{self.series_meta.loc[x, 'title']} ({self.settings[x][0]})'
                 fig.add_trace(go.Scatter(x=data.index, y=data[x], name=series_name), row=subplots.index(subplot)+2, col=1)
+
+        
+        #for x in self.finc_series:
+        #    series_name = f'{self.series_meta.loc[x, "title"]} ({self.finc_settings[x][0]})'
+        #    fig.add_trace(go.Scatter(x=data.index, y=data[x], name=series_name), row=rows, col=1)
+
 
 
         # Add the shaded areas
@@ -333,8 +445,9 @@ class Series(Transformations):
 
 
 class Models:
-    def __init__(self, settings_list:list=[]):
+    def __init__(self, settings_list:list=[], finc_settings:dict={}):
         self.settings_list = settings_list
+        self.finc_settings = finc_settings
     
     def initialized_models(self):
 
@@ -342,13 +455,16 @@ class Models:
         objs = []
 
         for settings in self.settings_list:
-            obj = Series(**settings)
+            obj = Series(**settings, finc_settings=self.finc_settings)
             series_ids = series_ids + obj.series
             objs.append(obj)
 
         series_ids = list(set(series_ids))
         self.series_ids = series_ids
-        data_obj = EconData(series_ids)
+
+        finc_symbols = list(self.finc_settings.keys())
+
+        data_obj = EconData(series_ids = series_ids, financials = finc_symbols)
         data_obj.load()
         self.data = data_obj
 
